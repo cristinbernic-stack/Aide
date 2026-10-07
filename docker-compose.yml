@@ -1,0 +1,123 @@
+# Toate serviciile de pe VPS. Porturile sunt legate pe BIND_IP (IP-ul Tailscale),
+# nu pe 0.0.0.0 — Docker ocolește ufw, deci asta e singura protecție reală.
+#
+# Pornire:  docker compose up -d
+# Log-uri:  docker compose logs -f runner
+
+x-restart: &restart
+  restart: always
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Endpoint OpenAI-compatible unic. Tot ce vorbește cu modelul trece pe aici:
+  # chei, buget, log-uri, fallback. Modelul expus se numește "coder".
+  litellm:
+    <<: *restart
+    image: ghcr.io/berriai/litellm:main-stable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_MAX_BUDGET: ${LITELLM_MAX_BUDGET}
+      RUNPOD_API_KEY: ${RUNPOD_API_KEY}
+      RUNPOD_API_BASE: ${RUNPOD_API_BASE}
+      MODEL_NAME: ${MODEL_NAME}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      STORE_MODEL_IN_DB: "False"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      - "${BIND_IP:-127.0.0.1}:4000:4000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Chat cu istoric, memorie per utilizator, căutare în documente.
+  open-webui:
+    <<: *restart
+    image: ghcr.io/open-webui/open-webui:main
+    depends_on:
+      - litellm
+    environment:
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_SIGNUP: "false"      # după ce îți creezi contul (primul user = admin)
+      DEFAULT_MODELS: coder
+    volumes:
+      - ./data/open-webui:/app/backend/data
+    ports:
+      - "${BIND_IP:-127.0.0.1}:3000:8080"
+
+  # Agent interactiv cu sandbox Docker și vizualizare diff.
+  # Pinează versiunea (și runtime-ul corespunzător) după prima rulare reușită.
+  openhands:
+    <<: *restart
+    image: docker.all-hands.dev/all-hands-ai/openhands:latest
+    depends_on:
+      - litellm
+    environment:
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: docker.all-hands.dev/all-hands-ai/runtime:latest-nikolaik
+      SANDBOX_USER_ID: "1000"
+      LLM_BASE_URL: http://litellm:4000
+      LLM_MODEL: openai/coder
+      LLM_API_KEY: ${LITELLM_MASTER_KEY}
+      LOG_ALL_EVENTS: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/openhands:/.openhands
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${BIND_IP:-127.0.0.1}:3001:3000"
+
+  # Issue cu label "agent" -> aider -> PR. Fără UI; log-uri cu `docker compose logs -f runner`.
+  runner:
+    <<: *restart
+    build: ./runner
+    depends_on:
+      - litellm
+    environment:
+      OPENAI_API_BASE: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      AIDER_MODEL: openai/coder
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      TARGET_REPO: ${TARGET_REPO}
+      TARGET_BRANCH: ${TARGET_BRANCH:-main}
+      TEST_CMD: ${TEST_CMD}
+      TASK_TIMEOUT_MIN: ${TASK_TIMEOUT_MIN:-30}
+      POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-60}
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Aide Agent}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-aide@users.noreply.github.com}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    volumes:
+      - ./data/runner:/work
+
+  # Monitorizare + alerte Telegram (configurezi din UI: verifică litellm:4000/health/liveliness).
+  uptime-kuma:
+    <<: *restart
+    image: louislam/uptime-kuma:1
+    volumes:
+      - ./data/uptime-kuma:/app/data
+    ports:
+      - "${BIND_IP:-127.0.0.1}:3002:3001"

@@ -1,0 +1,30 @@
+# LiteLLM: un singur model logic, "coder", indiferent unde rulează GPU-ul.
+# Schimbi provider-ul (serverless -> pod -> alt cloud) doar aici, nu în agenți.
+
+model_list:
+  - model_name: coder
+    litellm_params:
+      # Trebuie să fie identic cu MODEL_NAME din vLLM (vezi docs/runpod.md)
+      model: openai/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+      api_base: os.environ/RUNPOD_API_BASE
+      api_key: os.environ/RUNPOD_API_KEY
+      # Cold start serverless (încărcarea modelului de pe volum) poate dura 1-3 min.
+      timeout: 900
+      max_retries: 2
+      # Preț orientativ ca să apară costul în dashboard-ul LiteLLM
+      # (serverless 48 GB ~ $1.22/h; se ajustează după prima lună).
+      input_cost_per_token: 0.0000002
+      output_cost_per_token: 0.0000008
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 900
+  # Buget hard lunar pentru TOT traficul. Când se atinge, apelurile sunt refuzate.
+  max_budget: 55
+  budget_duration: 30d
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  # Dashboard-ul LiteLLM: http://<ip>:4000/ui (login cu master key)
+  store_model_in_db: false
