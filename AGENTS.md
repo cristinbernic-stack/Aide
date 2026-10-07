@@ -2,11 +2,12 @@
 
 Acest fișier este citit de agent (aider `--read`, OpenHands) la începutul fiecărui task.
 Este **memoria pe termen lung**: tot ce nu se poate deduce din cod și trebuie știut
-de fiecare dată. Se copiază în repo-ul-țintă (ex. Nexus) și se adaptează.
+de fiecare dată. Dacă agentul lucrează și pe alt repo, fișierul se copiază acolo și se adaptează.
 
 ## Proiect
 
-- Nume: Aide (infrastructura agentului). Repo-ul-țintă al task-urilor: `TARGET_REPO` din `.env`.
+- Nume: **Aide** — agent de cod self-hosted (infrastructură + agent + dashboard). Repo: `cristinbernic-stack/Aide`.
+- Repo-ul pe care lucrează agentul: `TARGET_REPO` din `.env` (implicit, Aide însuși).
 - Limba de lucru: română în mesaje, comentarii și PR-uri; codul și identificatorii în engleză.
 
 ## Reguli neschimbabile
